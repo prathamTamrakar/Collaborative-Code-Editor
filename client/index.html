@@ -3,11 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/logo.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="CoCode is a high-performance, real-time collaborative code editor supporting instant multi-user room-based synchronization, active presence tracking, and dynamic syntax highlighting." />
+    <meta name="theme-color" content="#181B26" />
+    <meta name="description" content="CoCode is a high-performance, real-time collaborative code editor supporting multi-user synchronization, active cursor presence, syntax highlighting, and voice chat." />
+    
+    <!-- Open Graph / Rich Social Previews -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="CoCode – Real-time Collaborative Code Editor" />
+    <meta property="og:description" content="Code together in real-time with instant CRDT synchronization, multi-cursor awareness, and crystal-clear voice chat." />
+    <meta property="og:image" content="/logo.svg" />
+
     <title>CoCode – Real-time Collaborative Code Editor</title>
   </head>
-  <body>
+  <body class="bg-[#1e1e1e] text-[#cccccc] antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

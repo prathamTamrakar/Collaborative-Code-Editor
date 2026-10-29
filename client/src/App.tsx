@@ -515,10 +515,8 @@ export default function App() {
     return (
       <div className="fixed inset-0 bg-[#0f0f11]/85 backdrop-blur-md flex items-center justify-center z-50">
         <form onSubmit={handleJoin} className="w-full max-w-sm bg-ide-sidebar border border-ide-border p-8 rounded-md flex flex-col gap-6 shadow-2xl">
-          <div className="flex items-center gap-2.5">
-            <div className="bg-primary-blue p-1.5 rounded-sm text-white">
-              <Code size={20} />
-            </div>
+          <div className="flex items-center gap-3">
+            <img src="/logo.svg" alt="CoCode Logo" className="w-8 h-8 rounded-md shadow-md shadow-blue-500/10" />
             <h1 className="font-sans font-bold text-base text-zinc-100 tracking-tight">
               CoCode Workspace
             </h1>
@@ -559,8 +557,8 @@ export default function App() {
       <aside className="bg-ide-sidebar border-r border-ide-border flex flex-col h-screen select-none shrink-0">
         
         {/* Sidebar Header Title */}
-        <div className="h-11 border-b border-ide-border flex items-center px-4 gap-2 bg-[#151518]">
-          <Code size={13} className="text-primary-blue" />
+        <div className="h-11 border-b border-ide-border flex items-center px-4 gap-2.5 bg-[#151518]">
+          <img src="/favicon.svg" alt="CoCode" className="w-4 h-4 rounded-xs shrink-0" />
           <span className="text-[11px] font-bold tracking-wider text-zinc-400 uppercase">
             EXPLORER
           </span>
