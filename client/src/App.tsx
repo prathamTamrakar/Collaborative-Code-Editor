@@ -8,7 +8,24 @@ import { Awareness } from 'y-protocols/awareness';
 import * as awarenessProtocol from 'y-protocols/awareness';
 import ChatPanel from './components/ChatPanel';
 
-const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:5000';
+// Determine backend WebSocket URL with production fallback
+const getSocketUrl = (): string => {
+  const envUrl = import.meta.env.VITE_SOCKET_URL;
+  if (envUrl && envUrl.trim()) {
+    return envUrl.trim();
+  }
+  if (typeof window !== 'undefined') {
+    const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (isLocal) {
+      return 'http://localhost:5000';
+    }
+    return window.location.origin;
+  }
+  return 'http://localhost:5000';
+};
+
+const SOCKET_URL = getSocketUrl();
+
 
 interface User {
   id: string;
@@ -92,7 +109,11 @@ export default function App() {
     }
 
     const pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+      ],
     });
 
     pc.onicecandidate = (event) => {
@@ -131,7 +152,14 @@ export default function App() {
     const awareness = new Awareness(ydoc);
     awarenessRef.current = awareness;
 
-    const socket = io(SOCKET_URL);
+    const socket = io(SOCKET_URL, {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      timeout: 20000,
+    });
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -139,8 +167,14 @@ export default function App() {
       socket.emit('join-room', { roomId, username });
     });
 
-    socket.on('disconnect', () => {
+    socket.on('disconnect', (reason) => {
       setConnected(false);
+      console.warn(`[Socket] Disconnected: ${reason}`);
+    });
+
+    socket.on('connect_error', (err) => {
+      setConnected(false);
+      console.warn(`[Socket] Connection error to ${SOCKET_URL}:`, err.message);
     });
 
     socket.on('room-init', ({ docUpdate, language: serverLang, users: serverUsers }) => {
@@ -360,10 +394,27 @@ export default function App() {
     }
   };
 
-  const handleCopyLink = () => {
-    navigator.clipboard.writeText(window.location.href);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopyLink = async () => {
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(window.location.href);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = window.location.href;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        textArea.remove();
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy link:', err);
+    }
   };
 
   const handleJoin = (e: React.FormEvent) => {

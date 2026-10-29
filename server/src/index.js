@@ -3,21 +3,100 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import * as Y from 'yjs';
+import dotenv from 'dotenv';
+
+// Load environment variables from .env file
+dotenv.config();
+
+const PORT = process.env.PORT || 5000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+
+// Parse allowed client origins for CORS
+const clientUrlEnv = process.env.CLIENT_URL || '';
+const parsedOrigins = clientUrlEnv
+  ? clientUrlEnv.split(',').map((url) => url.trim()).filter(Boolean)
+  : [];
+
+// Development fallback origins
+const defaultOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://localhost:4173',
+];
+
+const allowedOrigins = parsedOrigins.length > 0 ? parsedOrigins : defaultOrigins;
+const isWildcardOrigin = allowedOrigins.includes('*');
+
+const checkCorsOrigin = (origin, callback) => {
+  // Allow requests with no origin (e.g. mobile apps, curl, Postman, server-to-server)
+  if (!origin || isWildcardOrigin) {
+    return callback(null, true);
+  }
+  if (allowedOrigins.includes(origin)) {
+    return callback(null, true);
+  }
+  // In development, allow any localhost/127.0.0.1 port
+  if (NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    return callback(null, true);
+  }
+  console.warn(`[CORS] Blocked request from origin: ${origin}`);
+  return callback(new Error(`Origin ${origin} not allowed by CORS`));
+};
 
 const app = express();
-app.use(cors());
+
+// Middleware
+app.use(
+  cors({
+    origin: isWildcardOrigin ? '*' : checkCorsOrigin,
+    credentials: true,
+  })
+);
+app.use(express.json());
+
+// Room state storage
+// Structure:
+// roomId -> {
+//   ydoc: Y.Doc,
+//   language: string,
+//   users: Map(socketId -> { username, color, voiceState })
+// }
+const rooms = new Map();
+
+// Service Health & Status Endpoints
+app.get('/', (req, res) => {
+  res.json({
+    name: 'CoCode Collaborative Code Editor API',
+    status: 'online',
+    version: '1.0.0',
+    environment: NODE_ENV,
+    activeRooms: rooms.size,
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
 
 app.get('/health', (req, res) => {
-  res.send({ status: 'ok', uptime: process.uptime() });
+  res.status(200).json({
+    status: 'ok',
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    activeRooms: rooms.size,
+    activeConnections: io.engine ? io.engine.clientsCount : 0,
+  });
 });
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
   cors: {
-    origin: '*',
+    origin: isWildcardOrigin ? '*' : allowedOrigins,
     methods: ['GET', 'POST'],
+    credentials: true,
   },
-  maxHttpBufferSize: 1e8, // Allow syncing larger documents
+  maxHttpBufferSize: 1e8, // Allow syncing larger documents (100MB)
+  pingTimeout: 30000,
+  pingInterval: 25000,
 });
 
 const CURSOR_COLORS = [
@@ -33,32 +112,26 @@ const CURSOR_COLORS = [
   '#84CC16', // Lime
 ];
 
-// Room state storage
-// Structure:
-// roomId -> {
-//   ydoc: Y.Doc,
-//   language: string,
-//   users: Map(socketId -> { username, color })
-// }
-const rooms = new Map();
-
 io.on('connection', (socket) => {
-  console.log(`User connected: ${socket.id}`);
+  console.log(`[Socket] Client connected: ${socket.id}`);
 
   // Join Room
   socket.on('join-room', ({ roomId, username }) => {
     if (!roomId || !username) return;
 
     socket.join(roomId);
-    console.log(`User ${username} (${socket.id}) joined room: ${roomId}`);
+    console.log(`[Room ${roomId}] User "${username}" (${socket.id}) joined`);
 
     // Create room if it doesn't exist
     if (!rooms.has(roomId)) {
       const ydoc = new Y.Doc();
       const ytext = ydoc.getText('monaco');
-      
+
       // Initialize with default template text
-      ytext.insert(0, `// Welcome to CoCode Room ${roomId}!\n// Start coding together in real-time.\n\nfunction helloWorld() {\n  console.log("Hello, collaborative world!");\n}`);
+      ytext.insert(
+        0,
+        `// Welcome to CoCode Room ${roomId}!\n// Start coding together in real-time.\n\nfunction helloWorld() {\n  console.log("Hello, collaborative world!");\n}\n`
+      );
 
       rooms.set(roomId, {
         ydoc,
@@ -100,11 +173,11 @@ io.on('connection', (socket) => {
     try {
       // update is received as a Node Buffer from Socket.io, which matches Uint8Array
       Y.applyUpdate(room.ydoc, update);
-      
+
       // Broadcast update to all other clients in the room
       socket.to(roomId).emit('yjs-update', update);
     } catch (err) {
-      console.error(`Error applying Yjs update in room ${roomId}:`, err);
+      console.error(`[Error] Applying Yjs update in room ${roomId}:`, err);
     }
   });
 
@@ -172,9 +245,14 @@ io.on('connection', (socket) => {
         room.users.delete(socket.id);
 
         if (room.users.size === 0) {
-          // If no users left, clean up the room after a grace period or instantly
+          // All users left: clean up memory and destroy Yjs doc
+          try {
+            room.ydoc.destroy();
+          } catch (e) {
+            console.error(`[Error] Destroying Y.Doc in room ${roomId}:`, e);
+          }
           rooms.delete(roomId);
-          console.log(`Room ${roomId} deleted as all users left.`);
+          console.log(`[Room ${roomId}] Cleaned up and destroyed.`);
         } else {
           socket.to(roomId).emit('users-update', Array.from(room.users.values()));
         }
@@ -182,12 +260,49 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('disconnect', () => {
-    console.log(`User disconnected: ${socket.id}`);
+  socket.on('disconnect', (reason) => {
+    console.log(`[Socket] Client disconnected (${socket.id}): ${reason}`);
   });
 });
 
-const PORT = process.env.PORT || 5000;
+// Start listening
 httpServer.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`===============================================`);
+  console.log(`🚀 CoCode Collaborative Server`);
+  console.log(`📡 Environment: ${NODE_ENV}`);
+  console.log(`🚪 Port: ${PORT}`);
+  console.log(`🌐 Allowed Origins: ${isWildcardOrigin ? '*' : allowedOrigins.join(', ')}`);
+  console.log(`===============================================`);
 });
+
+// Graceful shutdown handling
+const handleGracefulShutdown = (signal) => {
+  console.log(`\n[${signal}] Received shutdown signal. Closing server gracefully...`);
+
+  // Destroy all active rooms and docs
+  for (const [roomId, room] of rooms.entries()) {
+    try {
+      room.ydoc.destroy();
+    } catch (e) {
+      // ignore
+    }
+  }
+  rooms.clear();
+
+  io.close(() => {
+    console.log('[Socket.io] All connections closed.');
+    httpServer.close(() => {
+      console.log('[HTTP] Server terminated successfully.');
+      process.exit(0);
+    });
+  });
+
+  // Force exit if hanging after 10 seconds
+  setTimeout(() => {
+    console.error('[Shutdown] Forced termination after timeout.');
+    process.exit(1);
+  }, 10000).unref();
+};
+
+process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
